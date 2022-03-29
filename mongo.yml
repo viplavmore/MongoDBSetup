@@ -1,0 +1,4 @@
+---
+- hosts: mongo_servers
+  roles:
+    - role: mongo
