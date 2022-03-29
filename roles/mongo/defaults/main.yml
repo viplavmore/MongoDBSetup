@@ -1,0 +1,5 @@
+---
+s_name: "{{ ansible_hostname }}"
+s_ip: "{{ ansible_eth0.ipv4.address }}"
+mongodb_admin_user: mongo-admin
+mongodb_admin_password: password
