@@ -1,0 +1,143 @@
+---
+######################## IP ADDRESS OF REMOTE MACHINE ##############################
+#- name: Retrieve IP Address
+#  debug:
+#    msg: "System IP address is : {{ s_ip }}"
+####################################################################################
+
+
+######################## INSTALL MONGODB ON UBUNTU #################################
+- name: Add id & Keyfile for MongoDB (Debian)
+  apt_key: id=2930ADAE8CAF5059EE73BB4B58712A2291FA4AD5 keyserver="keyserver.ubuntu.com" state=present
+  when: ansible_os_family == 'Debian'
+
+- name: Install the Repository (Debian)
+  apt_repository: repo="deb http://repo.mongodb.org/apt/{{ ansible_os_family|lower }} wheezy/mongodb-org/3.6 main" state=present
+  when: ansible_os_family == 'Debian'
+
+- name: Reload Local package database & Install MongoDB
+  apt: name=mongodb-org update_cache=yes state=present
+  when: ansible_os_family == 'Debian'
+#####################################################################################
+
+
+######################## INSTALL MONGODB ON CENTOS ##################################
+- name: Update Yum Repository
+  yum: name=* state=latest
+  when: ansible_os_family == 'RedHat'
+
+- name: Create Mongo repository
+  yum_repository:
+    name: mongodb-org-3.2
+    description: MongoDBRepository
+    file: mongodb-org-3.2
+    baseurl: https://repo.mongodb.org/yum/redhat/$releasever/mongodb-org/3.2/x86_64/
+    gpgcheck: 1
+    enabled: 1
+    gpgkey: https://www.mongodb.org/static/pgp/server-3.2.asc
+  when: ansible_os_family == 'RedHat'
+
+- name: Install Mongo DB
+  action: yum name=mongodb-org state=present
+  when: ansible_os_family == 'RedHat'
+#####################################################################################
+
+
+########################### ENABLE MONGO SERVICE ####################################
+- name: Enable "mongo" Service on Boot
+  service: name=mongod enabled=yes
+#####################################################################################
+
+
+########################## CREATE DIRECTORY STRUCTURE ###############################
+- name: Edit "/etc/hosts" file.
+  copy: src=files/hosts dest=/etc/hosts
+
+- name: Send Mongo Replication Initialisation files.
+  copy: src=files/init.js dest=/opt/
+
+- name: Send master file to vote
+  copy: src=files/master.js dest=/opt/
+
+- name: Send Mongo Add Members files.
+  copy: src=files/add.js dest=/opt/
+
+- name: Creating Database Directory
+  file: path=/opt/mongo state=directory
+#####################################################################################
+
+
+####################### SAME KEYFILE FOR ALL SERVERS ################################
+- name: Execute keyfile command & transfer to another machine.
+  shell: openssl rand -base64 756 > /opt/mongo/mongo-keyfile
+  delegate_to: mongo1
+
+- name: Transfer to 2nd Instance
+  shell: scp /opt/mongo/mongo-keyfile root@mongo2:/opt/mongo/
+  delegate_to: mongo1
+
+- name: Transfer to 3rd Instance
+  shell: scp /opt/mongo/mongo-keyfile root@mongo3:/opt/mongo/
+  delegate_to: mongo1
+#######################################################################################
+
+
+########################## CHANGE PERMISSION & OWNER ##################################
+- name: Change File permission & owner
+  file: dest=/opt/mongo/mongo-keyfile owner=mongodb group=mongodb mode=0400
+  when: ansible_os_family == 'Debian'
+
+- name: Change File permission & owner
+  file: dest=/opt/mongo/mongo-keyfile owner=mongod group=mongod mode=0400
+  when: ansible_os_family == 'RedHat'
+########################################################################################
+
+
+################################ INSTALL PYTHON MODULE #################################
+- name: Install Python Module
+  apt: name=python-pip update_cache=yes state=present
+
+- name: Install pymongo module
+  shell: pip install pymongo
+########################################################################################
+
+
+######################## CREATE ADMIN USER FOR MONGO ###################################
+- name: Create Admin User for Mongo
+  mongodb_user:
+    login_port: "27017"
+    database: "admin"
+    name: "mongo-admin"
+    password: "password"
+    roles: "root"
+    state: present
+  ignore_errors: yes
+  delegate_to: mongo1
+#########################################################################################
+
+
+########################### EDIT CONFIGURATION FILE #####################################
+- name: Edit "/etc/mongod.conf" Configuration file
+  lineinfile: dest=/etc/mongod.conf regexp={{ item.regexp }} line={{ item.line }}
+  with_items:
+  - { regexp: "  bindIp: 127.0.0.1", line: "  bindIp: 0.0.0.0"}
+  - { regexp: "#security:", line: "security:\n keyFile: /opt/mongo/mongo-keyfile"}
+  - { regexp: "#replication:", line: "replication:\n replSetName: rs0"}
+  notify:
+  - restart mongo
+#########################################################################################
+
+
+########################### INITIATE REPLICATION & ADD MEMBERS ##########################
+- name: Initiate Replication
+  shell: mongo -u mongo-admin -ppassword --authenticationDatabase admin < /opt/init.js
+  delegate_to: mongo1
+
+#- name: Waiting for master
+#  shell: mongo -u mongo-admin -ppassword --authenticationDatabase admin < /opt/master.js
+#  delegate_to: mongo1
+
+- name: Add members in replication
+  shell: mongo -u mongo-admin -ppassword --authenticationDatabase admin < /opt/add.js
+  delegate_to: mongo1
+#########################################################################################
